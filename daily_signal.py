@@ -94,11 +94,11 @@ def compute_signal(div_date, div_yield, bond_date, bond_yield):
     percentile = float((hist["spread"] <= spread).mean() * 100)
 
     if percentile >= 80:
-        signal = "🟢【加倍买入区】\n性价比极高，开启加倍定投或手动加仓。"
+        signal = "🟢 加倍买入 —— 性价比极高，可加仓"
     elif percentile >= 20:
-        signal = "🟡【正常定投区】\n性价比中性，按原计划正常定投即可。"
+        signal = "🟡 正常定投 —— 按计划执行即可"
     else:
-        signal = "🔴【停止买入/分批卖出区】\n性价比变差，停止定投，视仓位分批止盈。"
+        signal = "🔴 停止买入 —— 估值偏贵，分批止盈"
 
     return percentile, n, signal
 
@@ -130,21 +130,22 @@ def get_signal_data():
         )
         premium = fetch_premium()
 
+        date_dt = datetime.strptime(div_date, "%Y-%m-%d")
+        week = "一二三四五六日"[date_dt.weekday()]
+        spread = div_yield - bond_yield
+
         msg = (
-            "📊 512890 红利低波 · 每日决策面板\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            f"📅 数据日期：{div_date}\n"
-            f"💰 当前股息率：{div_yield:.2f}%\n"
-            f"🏦 10年期国债：{bond_yield:.2f}%\n"
-            f"✂️ 当前剪刀差：{div_yield - bond_yield:.2f} 个百分点\n"
-            f"📈 历史分位值：{percentile:.1f}% (上市以来{n}个交易日)\n"
-            f"💹 实时溢价率：{premium}\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            f"💡 今日操作建议：\n{signal}\n"
+            f"**{date_dt.month}月{date_dt.day}日 周{week}**\n\n"
+            f"# {percentile:.0f}%\n"
+            f"历史分位 · 上市以来 {n} 个交易日\n\n"
+            f"股息率 {div_yield:.2f}%　·　10Y 国债 {bond_yield:.2f}%\n\n"
+            f"剪刀差 **{spread:.2f}pp**\n\n"
+            f"> {signal}\n\n"
+            f"<sub>512890 实时溢价 {premium}</sub>"
         )
         return msg
     except Exception as e:
-        return f"⚠️ 获取数据失败，请检查接口状态。\n错误信息：{str(e)}"
+        return f"⚠️ 获取数据失败\n\n{str(e)}"
 
 
 def send_wechat(text):
@@ -153,9 +154,8 @@ def send_wechat(text):
     if not key:
         print("未配置 Server酱 SendKey，跳过发送。")
         return
-    title = "📊 512890 红利低波每日面板"
-    # 用代码块包裹，保留等宽排版与换行
-    desp = "```\n" + text + "\n```"
+    title = "512890 红利低波"
+    desp = text
     try:
         resp = requests.post(
             f"https://sctapi.ftqq.com/{key}.send",
