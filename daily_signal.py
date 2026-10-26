@@ -221,8 +221,8 @@ def build_dashboard_html(records):
 </html>"""
 
 
-def get_signal_data():
-    """组装完整决策面板文本。"""
+def get_signal_data(write_history=False):
+    """组装完整决策面板文本。write_history=False(盘中)只刷新大卡片；True(收盘后)才写入历史记录。"""
     try:
         div_date, div_yield = fetch_dividend_yield()
         bond_date, bond_yield = fetch_bond_yield()
@@ -251,7 +251,7 @@ def get_signal_data():
             f"<sub>512890 实时溢价 {premium}</sub>"
         )
 
-        # 存当日记录 + 生成手机仪表盘
+        # 当日实时记录（用于大卡片）
         rec = {
             "date": div_date,
             "percentile": round(percentile, 1),
@@ -262,12 +262,20 @@ def get_signal_data():
             "signal": signal,
             "n": n,
         }
-        records = upsert_record(load_records(), rec)
-        with open(RECORDS_FILE, "w", encoding="utf-8") as f:
-            json.dump(records, f, ensure_ascii=False, indent=2)
+        records = load_records()
+        if write_history:
+            # 收盘后：把今天这条写进历史（一天一条，按日期去重）
+            records = upsert_record(records, rec)
+            with open(RECORDS_FILE, "w", encoding="utf-8") as f:
+                json.dump(records, f, ensure_ascii=False, indent=2)
+        else:
+            # 盘中：大卡片显示实时值，但历史列表不重复记录今天
+            records = [r for r in records if r["date"] != rec["date"]]
+        # 大卡片用实时 rec，历史列表用 records
+        hero_records = [rec] + records
         with open("index.html", "w", encoding="utf-8") as f:
-            f.write(build_dashboard_html(records))
-        print("已生成 index.html 与 records.json")
+            f.write(build_dashboard_html(hero_records))
+        print(f"已生成 index.html (write_history={write_history})")
 
         return msg
     except Exception as e:
@@ -295,13 +303,15 @@ def send_wechat(text):
 
 if __name__ == "__main__":
     from datetime import timezone, timedelta
-    print("开始获取今日数据...")
-    report = get_signal_data()
+    now_bj = datetime.now(timezone(timedelta(hours=8)))
+    print(f"开始获取今日数据...(北京时间{now_bj.hour}点)")
+
+    # 收盘后(>=15点)才把今天写进历史记录并推微信；盘中只刷新大卡片
+    after_close = now_bj.hour >= 15
+    report = get_signal_data(write_history=after_close)
     print("生成的面板内容如下：\n" + report)
 
-    # 每小时都刷新网页，但只在北京时间傍晚(>=17点)推一条微信，避免打扰
-    bj_hour = datetime.now(timezone(timedelta(hours=8))).hour
-    if bj_hour >= 17:
+    if after_close:
         send_wechat(report)
     else:
-        print(f"当前北京时间{bj_hour}点，只更新网页，不推微信。")
+        print("盘中：只更新网页大卡片，不写历史、不推微信。")
