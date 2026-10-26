@@ -1,0 +1,41 @@
+name: Daily 512890 Signal
+
+on:
+  schedule:
+    # UTC 09:17 对应北京时间 17:17，周一到周五运行
+    - cron: '17 9 * * 1-5'
+  workflow_dispatch: # 允许随时在网页上手动点击运行测试
+
+permissions:
+  contents: write   # 允许把当日数据回写并提交到仓库（更新 history.csv）
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install akshare pandas requests
+
+      - name: Run daily signal script
+        env:
+          SERVER_SENDKEY: ${{ secrets.SERVER_SENDKEY }}
+        run: python daily_signal.py
+
+      - name: Commit updated history.csv
+        continue-on-error: true   # 提交失败不影响信号发送
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add history.csv records.json index.html
+          git diff --cached --quiet || git commit -m "chore: 更新 512890 红利低波每日数据 $(date +%F)"
+          git push
