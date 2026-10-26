@@ -12,12 +12,14 @@
   序列持续累积。
 """
 import os
+import json
 import requests
 import akshare as ak
 import pandas as pd
 from datetime import datetime
 
 HISTORY_FILE = "history.csv"
+RECORDS_FILE = "records.json"
 INDEX_CODE = "H30269"          # 中证红利低波动指数
 ETF_CODE = "512890"
 
@@ -93,14 +95,21 @@ def compute_signal(div_date, div_yield, bond_date, bond_yield):
     n = len(hist)
     percentile = float((hist["spread"] <= spread).mean() * 100)
 
+    # 策略：永远正常定投，只在便宜时慢慢加仓
     if percentile >= 80:
-        signal = "🟢 加倍买入 —— 性价比极高，可加仓"
+        dot = "🟢"
+        signal = "很便宜 —— 可以额外加仓"
+    elif percentile >= 50:
+        dot = "🟢"
+        signal = "偏便宜 —— 可慢慢多买一点"
     elif percentile >= 20:
-        signal = "🟡 正常定投 —— 按计划执行即可"
+        dot = "🟡"
+        signal = "中性 —— 正常定投即可"
     else:
-        signal = "🔴 停止买入 —— 估值偏贵，分批止盈"
+        dot = "🔴"
+        signal = "偏贵 —— 正常定投，先别加仓"
 
-    return percentile, n, signal
+    return percentile, n, signal, dot
 
 
 def fetch_premium():
@@ -120,12 +129,104 @@ def fetch_premium():
         return "获取失败"
 
 
+def load_records():
+    if os.path.exists(RECORDS_FILE):
+        with open(RECORDS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+
+def upsert_record(records, rec):
+    records = [r for r in records if r["date"] != rec["date"]]
+    records.append(rec)
+    records.sort(key=lambda r: r["date"], reverse=True)  # 新的在前
+    return records
+
+
+def build_dashboard_html(records):
+    """生成手机端极简仪表盘 index.html。"""
+    today = records[0] if records else None
+
+    def fmt_date(d):
+        dt = datetime.strptime(d, "%Y-%m-%d")
+        week = "一二三四五六日"[dt.weekday()]
+        return f"{dt.month}月{dt.day}日 周{week}"
+
+    if today:
+        hero = f"""
+        <div class="hero">
+          <div class="hero-date">{fmt_date(today['date'])}</div>
+          <div class="hero-pct">{today['dot']} {today['percentile']:.0f}<span>%</span></div>
+          <div class="hero-sub">历史分位 · 上市以来 {today['n']} 个交易日</div>
+          <div class="hero-nums">股息率 {today['div']:.2f}%　·　10Y 国债 {today['bond']:.2f}%</div>
+          <div class="hero-spread">剪刀差 <b>{today['spread']:.2f}pp</b></div>
+          <div class="hero-signal">{today['signal']}</div>
+        </div>"""
+    else:
+        hero = '<div class="hero">暂无数据</div>'
+
+    rows = ""
+    for r in records:
+        rows += f"""
+        <div class="row">
+          <div class="row-dot">{r['dot']}</div>
+          <div class="row-body">
+            <div class="row-date">{fmt_date(r['date'])}</div>
+            <div class="row-sig">{r['signal']}</div>
+          </div>
+          <div class="row-pct">{r['percentile']:.0f}%</div>
+        </div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f7f7f8">
+<title>512890 红利低波</title>
+<style>
+  * {{ margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }}
+  body {{ font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:#f7f7f8; color:#1a1a1a; padding:24px 18px 60px; max-width:560px; margin:0 auto; }}
+  .title {{ font-size:15px; color:#888; margin-bottom:18px; }}
+  .hero {{ background:#fff; border-radius:20px; padding:28px 22px; text-align:center; box-shadow:0 1px 4px rgba(0,0,0,.04); }}
+  .hero-date {{ font-size:14px; color:#999; }}
+  .hero-pct {{ font-size:64px; font-weight:700; line-height:1.1; margin:10px 0 4px; letter-spacing:-1px; }}
+  .hero-pct span {{ font-size:30px; font-weight:600; color:#555; }}
+  .hero-sub {{ font-size:13px; color:#999; margin-bottom:18px; }}
+  .hero-nums {{ font-size:15px; color:#444; }}
+  .hero-spread {{ font-size:15px; color:#444; margin:6px 0 18px; }}
+  .hero-signal {{ font-size:18px; font-weight:600; padding-top:16px; border-top:1px solid #f0f0f0; }}
+  .legend {{ font-size:12px; color:#aaa; line-height:1.9; margin:18px 6px; }}
+  .hist-title {{ font-size:13px; color:#999; margin:26px 6px 10px; }}
+  .row {{ background:#fff; border-radius:14px; padding:14px 16px; display:flex; align-items:center; margin-bottom:8px; }}
+  .row-dot {{ font-size:18px; margin-right:12px; }}
+  .row-body {{ flex:1; }}
+  .row-date {{ font-size:14px; color:#333; }}
+  .row-sig {{ font-size:12px; color:#999; margin-top:2px; }}
+  .row-pct {{ font-size:20px; font-weight:700; }}
+</style>
+</head>
+<body>
+  <div class="title">512890 红利低波 · 每日决策</div>
+  {hero}
+  <div class="legend">
+    🟢 ≥80% 很便宜，额外加仓<br>
+    🟢 50–80% 偏便宜，多买一点<br>
+    🟡 20–50% 中性，正常定投<br>
+    🔴 &lt;20% 偏贵，别加仓
+  </div>
+  <div class="hist-title">历史记录（新→旧）</div>
+  {rows}
+</body>
+</html>"""
+
+
 def get_signal_data():
     """组装完整决策面板文本。"""
     try:
         div_date, div_yield = fetch_dividend_yield()
         bond_date, bond_yield = fetch_bond_yield()
-        percentile, n, signal = compute_signal(
+        percentile, n, signal, dot = compute_signal(
             div_date, div_yield, bond_date, bond_yield
         )
         premium = fetch_premium()
@@ -136,13 +237,38 @@ def get_signal_data():
 
         msg = (
             f"**{date_dt.month}月{date_dt.day}日 周{week}**\n\n"
-            f"# {percentile:.0f}%\n"
+            f"# {dot} {percentile:.0f}%\n"
             f"历史分位 · 上市以来 {n} 个交易日\n\n"
             f"股息率 {div_yield:.2f}%　·　10Y 国债 {bond_yield:.2f}%\n\n"
             f"剪刀差 **{spread:.2f}pp**\n\n"
-            f"> {signal}\n\n"
+            f"### {signal}\n\n"
+            f"———\n"
+            f"分位怎么看：\n"
+            f"🟢 ≥80% 很便宜，额外加仓\n"
+            f"🟢 50–80% 偏便宜，多买一点\n"
+            f"🟡 20–50% 中性，正常定投\n"
+            f"🔴 <20% 偏贵，别加仓\n\n"
             f"<sub>512890 实时溢价 {premium}</sub>"
         )
+
+        # 存当日记录 + 生成手机仪表盘
+        rec = {
+            "date": div_date,
+            "percentile": round(percentile, 1),
+            "div": round(div_yield, 2),
+            "bond": round(bond_yield, 2),
+            "spread": round(spread, 2),
+            "dot": dot,
+            "signal": signal,
+            "n": n,
+        }
+        records = upsert_record(load_records(), rec)
+        with open(RECORDS_FILE, "w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
+        with open("index.html", "w", encoding="utf-8") as f:
+            f.write(build_dashboard_html(records))
+        print("已生成 index.html 与 records.json")
+
         return msg
     except Exception as e:
         return f"⚠️ 获取数据失败\n\n{str(e)}"
