@@ -36,6 +36,42 @@ def fetch_dividend_yield():
     return latest["date"].strftime("%Y-%m-%d"), float(latest["股息率1"])
 
 
+def fetch_realtime_point():
+    """H30269 实时点位（盘中）。失败返回 None。"""
+    try:
+        s = ak.stock_zh_index_spot_em(symbol="中证系列指数")
+        row = s[s["代码"].astype(str) == INDEX_CODE]
+        if not row.empty:
+            return float(row.iloc[0]["最新价"])
+    except Exception:
+        pass
+    return None
+
+
+def intraday_dividend_yield(div_date, div_yield):
+    """盘中实时股息率近似：以最近已知股息率+对应收盘点位为基准，
+    按实时点位缩放（点位涨→股息率降）。返回 (div_yield, point_now)。"""
+    point_now = fetch_realtime_point()
+    if point_now is None:
+        return div_yield, None
+    try:
+        h = ak.stock_zh_index_hist_csindex(
+            symbol=INDEX_CODE, start_date="20240101", end_date="20990101"
+        )
+        h["date"] = pd.to_datetime(h["日期"])
+        h = h[["date", "收盘"]].dropna().sort_values("date")
+        base_date = pd.Timestamp(div_date)
+        hist_row = h[h["date"] <= base_date].tail(1)
+        if hist_row.empty:
+            hist_row = h.tail(1)
+        base_point = float(hist_row.iloc[0]["收盘"])
+        if base_point > 0:
+            return div_yield * base_point / point_now, point_now
+    except Exception:
+        pass
+    return div_yield, point_now
+
+
 def fetch_bond_yield():
     """获取10年期国债收益率最新值。返回 (date_str, yield)。"""
     df = ak.bond_zh_us_rate()
@@ -225,6 +261,8 @@ def get_signal_data(write_history=False):
     """组装完整决策面板文本。write_history=False(盘中)只刷新大卡片；True(收盘后)才写入历史记录。"""
     try:
         div_date, div_yield = fetch_dividend_yield()
+        # 盘中用实时点位把股息率缩放到当下
+        div_yield, point_now = intraday_dividend_yield(div_date, div_yield)
         bond_date, bond_yield = fetch_bond_yield()
         percentile, n, signal, dot = compute_signal(
             div_date, div_yield, bond_date, bond_yield
@@ -235,11 +273,13 @@ def get_signal_data(write_history=False):
         week = "一二三四五六日"[date_dt.weekday()]
         spread = div_yield - bond_yield
 
+        point_txt = f"\n指数点位 **{point_now:.0f}**" if point_now else ""
         msg = (
             f"**{date_dt.month}月{date_dt.day}日 周{week}**\n\n"
             f"# {dot} {percentile:.0f}%\n"
             f"历史分位 · 上市以来 {n} 个交易日\n\n"
-            f"股息率 {div_yield:.2f}%　·　10Y 国债 {bond_yield:.2f}%\n\n"
+            f"股息率 {div_yield:.2f}%　·　10Y 国债 {bond_yield:.2f}%\n"
+            f"{point_txt}\n\n"
             f"剪刀差 **{spread:.2f}pp**\n\n"
             f"### {signal}\n\n"
             f"———\n"
