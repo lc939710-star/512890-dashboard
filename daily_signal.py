@@ -294,7 +294,14 @@ def send_wechat(text):
 
 
 if __name__ == "__main__":
+    from datetime import timezone, timedelta
     print("开始获取今日数据...")
     report = get_signal_data()
     print("生成的面板内容如下：\n" + report)
-    send_wechat(report)
+
+    # 每小时都刷新网页，但只在北京时间傍晚(>=17点)推一条微信，避免打扰
+    bj_hour = datetime.now(timezone(timedelta(hours=8))).hour
+    if bj_hour >= 17:
+        send_wechat(report)
+    else:
+        print(f"当前北京时间{bj_hour}点，只更新网页，不推微信。")

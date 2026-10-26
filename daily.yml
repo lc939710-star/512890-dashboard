@@ -2,8 +2,8 @@ name: Daily 512890 Signal
 
 on:
   schedule:
-    # UTC 09:17 对应北京时间 17:17，周一到周五运行
-    - cron: '17 9 * * 1-5'
+    # UTC 每小时第17分 = 北京时间每小时17分；工作日每小时刷新一次网页
+    - cron: '17 * * * 1-5'
   workflow_dispatch: # 允许随时在网页上手动点击运行测试
 
 permissions:
