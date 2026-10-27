@@ -37,12 +37,40 @@ def fetch_dividend_yield():
 
 
 def fetch_realtime_point():
-    """H30269 实时点位（盘中）。失败返回 None。"""
+    """H30269 最新点位。多源容错，失败返回 None。"""
+    # 源1：东财
     try:
         s = ak.stock_zh_index_spot_em(symbol="中证系列指数")
         row = s[s["代码"].astype(str) == INDEX_CODE]
         if not row.empty:
-            return float(row.iloc[0]["最新价"])
+            p = float(row.iloc[0]["最新价"])
+            if p > 0:
+                return p
+    except Exception:
+        pass
+    # 源2：新浪
+    try:
+        s2 = ak.stock_zh_index_spot_sina()
+        row2 = s2[s2["代码"].astype(str).str.contains("H30269|000922", na=False)]
+        if row2.empty:
+            row2 = s2[s2["名称"].astype(str).str.contains("红利低波", na=False)]
+        if not row2.empty:
+            p = float(row2.iloc[0]["最新价"])
+            if p > 0:
+                return p
+    except Exception:
+        pass
+    # 源3：csindex 历史收盘最新一条
+    try:
+        h = ak.stock_zh_index_hist_csindex(
+            symbol=INDEX_CODE, start_date="20260101", end_date="20990101"
+        )
+        h["date"] = pd.to_datetime(h["日期"])
+        h = h[["date", "收盘"]].dropna().sort_values("date")
+        if not h.empty:
+            p = float(h.iloc[-1]["收盘"])
+            if p > 0:
+                return p
     except Exception:
         pass
     return None
@@ -189,11 +217,13 @@ def build_dashboard_html(records):
         return f"{dt.month}月{dt.day}日 周{week}"
 
     if today:
+        point_line = f'<div class="hero-point">点位 {today["point"]:.0f}</div>' if today.get("point") else ""
         hero = f"""
         <div class="hero">
           <div class="hero-date">{fmt_date(today['date'])}</div>
           <div class="hero-pct">{today['dot']} {today['percentile']:.0f}<span>%</span></div>
           <div class="hero-sub">历史分位 · 上市以来 {today['n']} 个交易日</div>
+          {point_line}
           <div class="hero-nums">股息率 {today['div']:.2f}%　·　10Y 国债 {today['bond']:.2f}%</div>
           <div class="hero-spread">剪刀差 <b>{today['spread']:.2f}pp</b></div>
           <div class="hero-signal">{today['signal']}</div>
@@ -228,7 +258,8 @@ def build_dashboard_html(records):
   .hero-date {{ font-size:14px; color:#999; }}
   .hero-pct {{ font-size:64px; font-weight:700; line-height:1.1; margin:10px 0 4px; letter-spacing:-1px; }}
   .hero-pct span {{ font-size:30px; font-weight:600; color:#555; }}
-  .hero-sub {{ font-size:13px; color:#999; margin-bottom:18px; }}
+  .hero-sub {{ font-size:13px; color:#999; margin-bottom:14px; }}
+  .hero-point {{ font-size:14px; color:#666; margin-bottom:8px; font-weight:500; }}
   .hero-nums {{ font-size:15px; color:#444; }}
   .hero-spread {{ font-size:15px; color:#444; margin:6px 0 18px; }}
   .hero-signal {{ font-size:18px; font-weight:600; padding-top:16px; border-top:1px solid #f0f0f0; }}
@@ -304,6 +335,7 @@ def get_signal_data(write_history=False):
             "dot": dot,
             "signal": signal,
             "n": n,
+            "point": round(point_now, 0) if point_now else None,
         }
         records = load_records()
         if write_history:
