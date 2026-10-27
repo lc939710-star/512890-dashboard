@@ -2,7 +2,7 @@ name: Daily 512890 Signal
 
 on:
   schedule:
-    - cron: '17 9 * * 1-5'
+    - cron: '*/15 1-9 * * 1-5'
   workflow_dispatch:
 
 permissions:
@@ -35,6 +35,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add history.csv
+          git add history.csv records.json index.html
           git diff --cached --quiet || git commit -m "chore: daily update"
           git push
