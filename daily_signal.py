@@ -53,7 +53,7 @@ def fetch_realtime_point():
         s2 = ak.stock_zh_index_spot_sina()
         row2 = s2[s2["代码"].astype(str).str.contains("H30269|000922", na=False)]
         if row2.empty:
-            row2 = s2[s2["名称"].astype(str).str.contains("红利低波", na=False)]
+            row2 = s2[s2["名称"].astype(str).strcontains("红利低波", na=False)]
         if not row2.empty:
             p = float(row2.iloc[0]["最新价"])
             if p > 0:
@@ -76,9 +76,59 @@ def fetch_realtime_point():
     return None
 
 
+def fetch_etf_price():
+    """512890 ETF 今日价格和昨日收盘。多源容错。返回 (today_price, yest_close) 或 None。"""
+    # 源1：腾讯行情 (qt.gtimg.cn) 最稳，直接 HTTP
+    try:
+        r = requests.get("https://qt.gtimg.cn/q=sh512890", timeout=8)
+        r.encoding = "gbk"
+        line = r.text
+        # 格式: v_sh512890="1~红利低波ETF~512890~现价~昨收~今开~..."
+        data = line.split('="', 1)[1].rstrip('";').split("~")
+        price = float(data[3])      # 当前价
+        yest = float(data[4])        # 昨收
+        if price > 0 and yest > 0:
+            return price, yest
+    except Exception:
+        pass
+    # 源2：东财 ETF 实时
+    try:
+        df = ak.fund_etf_spot_em()
+        row = df[df["代码"] == ETF_CODE]
+        if not row.empty:
+            price = float(row.iloc[0]["最新价"])
+            yest = float(row.iloc[0].get("昨收盘价", row.iloc[0].get("昨收", 0)))
+            if price > 0 and yest > 0:
+                return price, yest
+    except Exception:
+        pass
+    # 源3：东财历史行情，取最近两天
+    try:
+        h = ak.fund_etf_hist_em(symbol=ETF_CODE, period="daily",
+                                start_date="20261001", end_date="20990101", adjust="")
+        h = h.sort_values("日期")
+        if len(h) >= 2:
+            price = float(h.iloc[-1]["收盘"])
+            yest = float(h.iloc[-2]["收盘"])
+            if price > 0 and yest > 0:
+                return price, yest
+    except Exception:
+        pass
+    return None
+
+
 def intraday_dividend_yield(div_date, div_yield):
-    """盘中实时股息率近似：以最近已知股息率+对应收盘点位为基准，
-    按实时点位缩放（点位涨→股息率降）。返回 (div_yield, point_now)。"""
+    """用 512890 ETF 实时价格缩放股息率：
+    官方股息率基准日 = 最近一个交易日；今天 ETF 价格相对昨收的涨跌 = 指数涨跌近似。
+    股息率与价格成反比：价格涨 X%，股息率跌 X%。
+    返回 (adjusted_div_yield, etf_price_str)。"""
+    etf = fetch_etf_price()
+    if etf:
+        price, yest = etf
+        # 官方股息率的基准 ≈ 昨天收盘（10-26），今天 ETF 价格变了，按比例缩放
+        adjusted = div_yield * yest / price
+        return adjusted, f"{price:.3f}"
+    # ETF 拿不到，退回指数点位法
     point_now = fetch_realtime_point()
     if point_now is None:
         return div_yield, None
@@ -94,10 +144,10 @@ def intraday_dividend_yield(div_date, div_yield):
             hist_row = h.tail(1)
         base_point = float(hist_row.iloc[0]["收盘"])
         if base_point > 0:
-            return div_yield * base_point / point_now, point_now
+            return div_yield * base_point / point_now, f"{point_now:.0f}"
     except Exception:
         pass
-    return div_yield, point_now
+    return div_yield, f"{point_now:.0f}" if point_now else None
 
 
 def fetch_bond_yield():
@@ -217,7 +267,7 @@ def build_dashboard_html(records):
         return f"{dt.month}月{dt.day}日 周{week}"
 
     if today:
-        point_line = f'<div class="hero-point">点位 {today["point"]:.0f}</div>' if today.get("point") else ""
+        point_line = f'<div class="hero-point">512890 现价 {today["point"]}</div>' if today.get("point") else ""
         hero = f"""
         <div class="hero">
           <div class="hero-date">{fmt_date(today['date'])}</div>
@@ -306,7 +356,7 @@ def get_signal_data(write_history=False):
         week = "一二三四五六日"[today.weekday()]
         spread = div_yield - bond_yield
 
-        point_txt = f"\n指数点位 **{point_now:.0f}**" if point_now else ""
+        point_txt = f"\n512890 现价 **{point_now}**" if point_now else ""
         base_note = f"<sub>股息率基准 {div_date} · 512890 溢价 {premium}</sub>"
         msg = (
             f"**{today.month}月{today.day}日 周{week}**\n\n"
@@ -335,7 +385,7 @@ def get_signal_data(write_history=False):
             "dot": dot,
             "signal": signal,
             "n": n,
-            "point": round(point_now, 0) if point_now else None,
+            "point": point_now,
         }
         records = load_records()
         if write_history:
