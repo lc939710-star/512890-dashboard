@@ -269,13 +269,16 @@ def get_signal_data(write_history=False):
         )
         premium = fetch_premium()
 
-        date_dt = datetime.strptime(div_date, "%Y-%m-%d")
-        week = "一二三四五六日"[date_dt.weekday()]
+        # 卡片日期用"今天"（运行日），股息率官方基准可能滞后一天
+        from datetime import timezone, timedelta
+        today = datetime.now(timezone(timedelta(hours=8)))
+        week = "一二三四五六日"[today.weekday()]
         spread = div_yield - bond_yield
 
         point_txt = f"\n指数点位 **{point_now:.0f}**" if point_now else ""
+        base_note = f"<sub>股息率基准 {div_date} · 512890 溢价 {premium}</sub>"
         msg = (
-            f"**{date_dt.month}月{date_dt.day}日 周{week}**\n\n"
+            f"**{today.month}月{today.day}日 周{week}**\n\n"
             f"# {dot} {percentile:.0f}%\n"
             f"历史分位 · 上市以来 {n} 个交易日\n\n"
             f"股息率 {div_yield:.2f}%　·　10Y 国债 {bond_yield:.2f}%\n"
@@ -288,12 +291,12 @@ def get_signal_data(write_history=False):
             f"🟢 50–80% 偏便宜，多买一点\n"
             f"🟡 20–50% 中性，正常定投\n"
             f"🔴 <20% 偏贵，别加仓\n\n"
-            f"<sub>512890 实时溢价 {premium}</sub>"
+            f"{base_note}"
         )
 
         # 当日实时记录（用于大卡片）
         rec = {
-            "date": div_date,
+            "date": today.strftime("%Y-%m-%d"),
             "percentile": round(percentile, 1),
             "div": round(div_yield, 2),
             "bond": round(bond_yield, 2),
